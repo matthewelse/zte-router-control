@@ -57,11 +57,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let client = reqwest::ClientBuilder::new()
         .default_headers(headers)
+        .cookie_store(true)
         .build()?;
 
     // Start by getting a token from the server.
     let req = client
-        .get(get_url)
+        .get(&get_url)
         .query(&[("isTest", "false"), ("cmd", "LD")])
         .build()?;
 
@@ -69,13 +70,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     debug!("got token {token}");
 
+    // Password = hex_upper(sha256(hex_upper(sha256(password)) + token))
     let mut hasher = Sha256::new();
     hasher.update(args.password.as_bytes());
 
     let mut password = [0u8; 128];
 
     let (left, right) = password.split_at_mut(64);
-    let _ = base16ct::upper::encode(&hasher.finalize(), left).unwrap();
+    base16ct::upper::encode(&hasher.finalize(), left).unwrap();
 
     right.copy_from_slice(token.as_bytes());
 
@@ -85,8 +87,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let password = base16ct::upper::encode_str(&hasher.finalize(), &mut password).unwrap();
     debug!("got password {password}");
 
+    // Logon, get the session key.
     let req = client
-        .post(post_url)
+        .post(&post_url)
         .header("Origin", format!("http://{}", args.router_host))
         .form(&[
             ("isTest", "false"),
@@ -95,9 +98,24 @@ async fn main() -> Result<(), Box<dyn Error>> {
         ])
         .build()?;
 
-    let Logon { result } = client.execute(req).await?.json::<Logon>().await?;
+    let res = client.execute(req).await?;
+
+    let Logon { result } = res.json::<Logon>().await?;
 
     info!("successfully logged on code = {result:?}");
+
+    let req = client
+        .get(&get_url)
+        .query(&[
+            ("isTest", "false"),
+            ("multi_data", "1"),
+            ("cmd", "loginfo,network_provider,network_type,signalbar"),
+        ])
+        .build()?;
+
+    let x = client.execute(req).await?.text().await?;
+
+    println!("{x:?}");
 
     Ok(())
 }
